@@ -1,0 +1,248 @@
+import datetime as dt
+from typing import Optional
+
+import sqlalchemy
+from fastapi import FastAPI, Header, HTTPException, Request, Depends
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from auth import verify_headers
+from store import STORE, Mode, now_utc
+from utils import new_id
+from db import Session
+from models import Order
+
+app = FastAPI(title="Vending Machine Control API (MVP)")
+
+# Debug-Route: zeigt dir alle eingehenden Header
+@app.get("/debug/headers")   # absichtlich OHNE auth_guard
+def debug_headers(request: Request):
+    return dict(request.headers)
+
+# ---------- Swagger/OpenAPI mit Bearer-Auth (Authorize-Button) ----------
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title="Vending Machine Control API (MVP)",
+        version="0.1.0",
+        description="Bridge API to control vending machine",
+        routes=app.routes,
+    )
+
+    components = openapi_schema.setdefault("components", {})
+    security_schemes = components.setdefault("securitySchemes", {})
+    security_schemes["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+    }
+
+    # Standard-Security auf alle Operationen legen
+    for path_item in openapi_schema.get("paths", {}).values():
+        for operation in path_item.values():
+            if isinstance(operation, dict):
+                operation.setdefault("security", [{"BearerAuth": []}])
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# ---------- Schemas ----------
+class SetModeReq(BaseModel):
+    mode: int = Field(..., ge=1, le=4)
+
+class OrderCreateReq(BaseModel):
+    product_id: str
+    timeslot: str            # RFC3339
+    pickup_code: str
+
+class PaymentUpdateReq(BaseModel):
+    order_id: str
+    status: str              # paid | not_paid
+
+class LockerOpenReq(BaseModel):
+    pickup_code: str
+
+class LockerLabelReq(BaseModel):
+    pickup_code: str
+    label_text: str
+
+class CustomerPresentReq(BaseModel):
+    automaton_id: str
+    status: bool
+
+# ---------- Auth Guard ----------
+async def auth_guard(
+    request: Request,
+    authorization: str = Header(..., alias="Authorization"),
+    x_timestamp: str = Header(..., alias="X-Timestamp"),
+    x_nonce: str = Header(..., alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
+    body = await request.body()
+    ok, err = verify_headers(
+        authorization=authorization,
+        x_timestamp=x_timestamp,
+        x_nonce=x_nonce,
+        x_signature=x_signature,
+        method=request.method,
+        path=request.url.path,
+        body=body,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=403 if err != "missing_token" else 401,
+            detail=err
+        )
+
+# ---------- Machine Modes ----------
+@app.post("/api/machine/set_mode", dependencies=[Depends(auth_guard)])
+def set_mode(req: SetModeReq):
+    STORE["mode"] = Mode(req.mode)
+    STORE["mode_version"] += 1
+    return {"mode": STORE["mode"].value, "mode_version": STORE["mode_version"], "at": now_utc()}
+
+@app.get("/api/machine/status", dependencies=[Depends(auth_guard)])
+def machine_status():
+    return {"mode": STORE["mode"].value, "mode_version": STORE["mode_version"], "at": now_utc()}
+
+# ---------- Presence ----------
+@app.post("/api/automaton/customer_present", dependencies=[Depends(auth_guard)])
+def customer_present(req: CustomerPresentReq):
+    STORE["presence"][req.automaton_id] = req.status
+    if req.status:
+        STORE["mode"] = Mode(2)  # direct-only während Kundenpräsenz
+        STORE["mode_version"] += 1
+    return {"automaton_id": req.automaton_id, "status": req.status, "mode": STORE["mode"].value}
+
+# ---------- Orders (persistiert in SQLite) ----------
+@app.post("/api/order/create", dependencies=[Depends(auth_guard)])
+async def order_create(
+    req: OrderCreateReq,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    # Idempotenz: einfacher In-Memory-Cache
+    if idempotency_key and idempotency_key in STORE["idem"]:
+        return STORE["idem"][idempotency_key]
+
+    # Modus prüfen: nur in 1 (OPEN_ALL) oder 4 (BLOCK_ONSITE)
+    if STORE["mode"] not in (Mode(1), Mode(4)):
+        raise HTTPException(status_code=409, detail="invalid_mode_for_order")
+
+    async with Session() as s:
+        # Timeslot-Konflikt prüfen
+        exists = (await s.execute(
+            sqlalchemy.select(Order).where(Order.timeslot == req.timeslot)
+        )).scalar_one_or_none()
+        if exists:
+            raise HTTPException(status_code=409, detail="conflict_timeslot")
+
+        order_id = new_id("ord_")
+        row = Order(
+            id=order_id,
+            product_id=req.product_id,
+            timeslot=req.timeslot,
+            pickup_code=req.pickup_code,
+            status="pending",
+            payment="not_paid",
+            created_at=dt.datetime.utcnow(),
+        )
+        s.add(row)
+        await s.commit()
+
+    # Maschine in Produktion setzen
+    STORE["mode"] = Mode(3)
+    STORE["mode_version"] += 1
+
+    resp = {
+        "order_id": order_id,
+        "status": "pending",
+        "product_id": req.product_id,
+        "timeslot": req.timeslot,
+        "pickup_code": req.pickup_code,
+    }
+    if idempotency_key:
+        STORE["idem"][idempotency_key] = resp
+    return JSONResponse(status_code=201, content=resp)
+
+@app.get("/api/order/status", dependencies=[Depends(auth_guard)])
+async def order_status(order_id: str):
+    async with Session() as s:
+        row = await s.get(Order, order_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="order_not_found")
+        return {
+            "order_id": row.id,
+            "status": row.status,
+            "product_id": row.product_id,
+            "timeslot": row.timeslot,
+            "pickup_code": row.pickup_code,
+            "payment": row.payment,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+@app.post("/api/order/complete", dependencies=[Depends(auth_guard)])
+async def order_complete(order_id: str):
+    async with Session() as s:
+        row = await s.get(Order, order_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="order_not_found")
+        row.status = "completed"
+        await s.commit()
+
+    STORE["mode"] = Mode(1)
+    STORE["mode_version"] += 1
+    return {"order_id": order_id, "status": "completed", "at": now_utc()}
+
+# ---------- Locker & Pickup (noch In-Memory, MVP) ----------
+@app.post("/api/locker/open", dependencies=[Depends(auth_guard)])
+def locker_open(req: LockerOpenReq):
+    for o in STORE["orders"].values():
+        if o["pickup_code"] == req.pickup_code:
+            o["locker_opened"] = True
+            return {"status": "opened"}
+    raise HTTPException(status_code=404, detail="invalid_code")
+
+@app.post("/api/pickup/confirm", dependencies=[Depends(auth_guard)])
+def pickup_confirm(req: LockerOpenReq):
+    for o in STORE["orders"].values():
+        if o["pickup_code"] == req.pickup_code:
+            o["status"] = "completed"
+            return {"status": "completed"}
+    raise HTTPException(status_code=404, detail="invalid_code")
+
+@app.post("/api/locker/label", dependencies=[Depends(auth_guard)])
+def locker_label(req: LockerLabelReq):
+    STORE["labels"][req.pickup_code] = req.label_text
+    return {"pickup_code": req.pickup_code, "label": req.label_text}
+
+# ---------- Inventory & Payment (noch In-Memory, MVP) ----------
+@app.get("/api/inventory/status", dependencies=[Depends(auth_guard)])
+def inventory_status(product_id: Optional[str] = None):
+    inv = STORE["inventory"]
+    if product_id:
+        qty = inv.get(product_id, 0)
+        return {"product_id": product_id, "qty": qty}
+    return inv
+
+@app.post("/api/payment/update", dependencies=[Depends(auth_guard)])
+def payment_update(req: PaymentUpdateReq):
+    o = STORE["orders"].get(req.order_id)
+    if not o:
+        raise HTTPException(status_code=404, detail="order_not_found")
+    if req.status not in ("paid", "not_paid"):
+        raise HTTPException(status_code=422, detail="invalid_status")
+    o["payment"] = req.status
+    return {"order_id": req.order_id, "payment": req.status}
+
+# ---------- Production Time (Dummy) ----------
+@app.get("/api/production/time", dependencies=[Depends(auth_guard)])
+def production_time(order_id: str):
+    o = STORE["orders"].get(order_id)
+    if not o:
+        raise HTTPException(status_code=404, detail="order_not_found")
+    return {"order_id": order_id, "estimate_sec": 180}
