@@ -1,0 +1,7 @@
+# Bridge Frontend
+
+## Setup
+```bash
+cd frontend
+npm ci
+npm run dev
