@@ -1,5 +1,7 @@
 ﻿from fastapi import FastAPI
 from .routers import system, orders, locker, payment, production
+from db import ENGINE
+from .models import Base
 
 app = FastAPI(title="Bridge API", version="0.1.0")
 
@@ -12,8 +14,6 @@ app.include_router(production.router)
 @app.get("/health")
 def health():
     return {"ok": True}
-from db import ENGINE
-from models import Base
 
 @app.on_event("startup")
 async def _init_db():
