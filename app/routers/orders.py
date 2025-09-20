@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ._auth_dep import auth_guard_factory
 from db import Session
 from ..models import Order
-from store import STORE
-from utils import new_id
+from ..store import STORE
+from ..utils import new_id
 
 router = APIRouter(prefix="/api/order", tags=["order"])
 
@@ -19,7 +19,7 @@ async def _db() -> AsyncSession:
 )
 async def create_order(
     body: dict,
-    idem_key: Union[str, None] = Header(None, alias="Idempotency-Key"),  # Fix: Union für Python 3.9
+    idem_key: Union[str, None] = Header(None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(_db),
 ):
     product_id = body.get("product_id")
