@@ -160,7 +160,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="jsx">
 import { ref, computed } from "vue";
 import { setMode } from "../services/machine";
 import { createOrder, getOrderStatus, completeOrder } from "../services/orders";
