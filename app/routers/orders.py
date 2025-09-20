@@ -1,4 +1,5 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Header
+﻿from typing import Union
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from ._auth_dep import auth_guard_factory
 from db import Session
@@ -18,7 +19,7 @@ async def _db() -> AsyncSession:
 )
 async def create_order(
     body: dict,
-    idem_key: str | None = Header(None, alias="Idempotency-Key"),
+    idem_key: Union[str, None] = Header(None, alias="Idempotency-Key"),  # Fix: Union für Python 3.9
     db: AsyncSession = Depends(_db),
 ):
     product_id = body.get("product_id")
