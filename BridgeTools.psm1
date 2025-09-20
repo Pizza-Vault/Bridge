@@ -56,8 +56,15 @@ function Invoke-Bridge {
 }
 
 function Get-BridgeHealth { Invoke-Bridge -Path '/health' }
+function Get-BridgeMode { Invoke-Bridge -Path '/api/system/mode' }
+function Set-BridgeMode { param([int]$Mode) Invoke-Bridge -Method 'POST' -Path '/api/system/mode' -Body @{mode = $Mode} }
 function New-BridgeOrder { param([string]$ProductId, [string]$Timeslot) Invoke-Bridge -Method 'POST' -Path '/api/order/create' -Body @{product_id = $ProductId; timeslot = $Timeslot} }
 function Get-BridgeOrderStatus { param([string]$OrderId) Invoke-Bridge -Path "/api/order/status?order_id=$OrderId" }
+function Get-BridgeProductionTime { param([string]$OrderId) Invoke-Bridge -Path "/api/production/time?order_id=$OrderId" }
+function Set-BridgePayment { param([string]$OrderId) Invoke-Bridge -Method 'POST' -Path '/api/payment/charge' -Body @{order_id = $OrderId; status = 'paid'} }
+function Set-BridgeLockerLabel { param([string]$PickupCode, [string]$Label) Invoke-Bridge -Method 'POST' -Path '/api/locker/label' -Body @{pickup_code = $PickupCode; label_text = $Label} }
+function Open-BridgeLocker { param([string]$PickupCode) Invoke-Bridge -Method 'POST' -Path '/api/locker/open' -Body @{pickup_code = $PickupCode} }
+function Confirm-BridgePickup { param([string]$PickupCode) Invoke-Bridge -Method 'POST' -Path '/api/locker/pickup/confirm' -Body @{pickup_code = $PickupCode} }
 
 # Export am Ende
-Export-ModuleMember -Function Set-BridgeEnv, Invoke-Bridge, Get-BridgeHealth, New-BridgeOrder, Get-BridgeOrderStatus
+Export-ModuleMember -Function Set-BridgeEnv, Invoke-Bridge, Get-BridgeHealth, Get-BridgeMode, Set-BridgeMode, New-BridgeOrder, Get-BridgeOrderStatus, Get-BridgeProductionTime, Set-BridgePayment, Set-BridgeLockerLabel, Open-BridgeLocker, Confirm-BridgePickup
