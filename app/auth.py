@@ -2,7 +2,6 @@ import hmac
 import hashlib
 import os
 from typing import Union
-from fastapi import HTTPException, Request
 import time
 
 SECRET = os.getenv("BRIDGE_SECRET", "replace-with-strong-secret").encode()

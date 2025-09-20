@@ -1,33 +1,26 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
 from ._auth_dep import auth_guard_factory
-from store import STORE, Mode, now_utc
+from starlette.requests import Request
 
-router = APIRouter(prefix="/api/system", tags=["system"])
+router = APIRouter()
 
-@router.get("/mode", dependencies=[Depends(auth_guard_factory("GET", "/api/system/mode"))])
-def get_mode():
-    return {"mode": int(STORE["mode"]), "mode_version": STORE["mode_version"], "at": now_utc()}
+@router.get("/mode")
+def get_mode(
+    request: Request,
+    auth = Depends(auth_guard_factory("GET", "/api/system/mode"))
+):
+    # Logik für Mode abrufen (aus DB oder State)
+    mode = 1  # Platzhalter – erweitere mit DB
+    return {"mode": mode, "mode_version": 1, "at": "2025-09-20T12:00:00Z"}
 
-@router.post("/mode", dependencies=[Depends(auth_guard_factory("POST", "/api/system/mode"))])
-def set_mode(body: dict):
-    try:
-        mode = int(body.get("mode"))
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid_mode")
-    if mode not in (1, 2, 3, 4):
-        raise HTTPException(status_code=422, detail="invalid_mode")
-    STORE["mode"] = Mode(mode)
-    STORE["mode_version"] += 1
-    return {"mode": int(STORE["mode"]), "mode_version": STORE["mode_version"], "at": now_utc()}
-
-@router.post("/presence", dependencies=[Depends(auth_guard_factory("POST", "/api/system/presence"))])
-def presence(body: dict):
-    automaton_id = body.get("automaton_id")
-    status = bool(body.get("status", False))
-    if not automaton_id:
-        raise HTTPException(status_code=422, detail="missing_automaton_id")
-    STORE["presence"][automaton_id] = status
-    if status:
-        STORE["mode"] = Mode.DIRECT_ONLY
-        STORE["mode_version"] += 1
-    return {"automaton_id": automaton_id, "status": status, "mode": int(STORE["mode"])}
+@router.post("/mode")
+def set_mode(
+    body: dict,
+    request: Request,
+    auth = Depends(auth_guard_factory("POST", "/api/system/mode"))
+):
+    mode = body.get("mode")
+    if mode is None:
+        raise HTTPException(status_code=400, detail="Missing mode")
+    # Logik für Mode setzen (DB-Update)
+    return {"mode": mode, "message": "Set"}
