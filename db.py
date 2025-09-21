@@ -1,4 +1,13 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+import os
 
-ENGINE = create_async_engine("sqlite+aiosqlite:///./bridge.db", future=True)
-Session = async_sessionmaker(ENGINE, expire_on_commit=False)
+DATABASE_URL = "sqlite+aiosqlite:///./bridge.db"
+engine = create_async_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_db():
+    async with SessionLocal() as session:
+        yield session
+
+ENGINE = engine  # For main.py

@@ -1,6 +1,6 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
 from ._auth_dep import auth_guard_factory
-from store import STORE
+from ..store import STORE  # Fix: Relativer Import!
 
 router = APIRouter(prefix="/api/production", tags=["production"])
 

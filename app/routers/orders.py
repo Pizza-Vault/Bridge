@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from ._auth_dep import auth_guard_factory
-from db import Session
+from db import SessionLocal as Session  # Fix: Root-db.py
 from ..models import Order
 from ..store import STORE
 from ..utils import new_id
@@ -41,6 +41,7 @@ async def create_order(
         "pickup_code": pickup_code,
         "status": "pending",
         "payment": "not_paid",
+        "locker_opened": False  # Hinzufügen für Konsistenz mit locker.py
     }
 
     # In-Memory (MVP)

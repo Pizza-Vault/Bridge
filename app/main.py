@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI
 from .routers import system, orders, locker, payment, production
-from db import ENGINE
+from .db import ENGINE
 from .models import Base
 
 app = FastAPI(title="Bridge API", version="0.1.0")

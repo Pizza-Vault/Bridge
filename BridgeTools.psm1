@@ -59,8 +59,52 @@ function Get-BridgeHealth { Invoke-Bridge -Path '/health' }
 function Get-BridgeMode { Invoke-Bridge -Path '/api/system/mode' }
 function Set-BridgeMode { param([int]$Mode) Invoke-Bridge -Method 'POST' -Path '/api/system/mode' -Body @{mode = $Mode} }
 function New-BridgeOrder { param([string]$ProductId, [string]$Timeslot) Invoke-Bridge -Method 'POST' -Path '/api/order/create' -Body @{product_id = $ProductId; timeslot = $Timeslot} }
-function Get-BridgeOrderStatus { param([string]$OrderId) Invoke-Bridge -Path "/api/order/status?order_id=$OrderId" }
-function Get-BridgeProductionTime { param([string]$OrderId) Invoke-Bridge -Path "/api/production/time?order_id=$OrderId" }
+function Get-BridgeOrderStatus { 
+  param([string]$OrderId)
+  # Fix: Signatur mit clean Path (/api/order/status), URL mit Query
+  $signPath = '/api/order/status'
+  $fullPath = "/api/order/status?order_id=$OrderId"
+  $timestamp = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $nonce = [guid]::NewGuid().ToString().Replace('-', '')
+  $bodyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'  # Empty for GET
+  $baseString = "GET`n$signPath`n$bodyHash`n$timestamp`n$nonce"
+  $keyBytes = [System.Text.Encoding]::UTF8.GetBytes($script:BridgeSecret)
+  $hmac = New-Object System.Security.Cryptography.HMACSHA256
+  $hmac.Key = $keyBytes
+  $signatureBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($baseString))
+  $signature = ($signatureBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ''
+  $headers = @{
+    'Authorization' = "Bearer $script:BridgeToken"
+    'X-Timestamp' = $timestamp
+    'X-Nonce' = $nonce
+    'X-Signature' = $signature
+  }
+  $url = "$script:BridgeBase$fullPath"
+  Invoke-RestMethod -Uri $url -Method 'GET' -Headers $headers
+}
+function Get-BridgeProductionTime { 
+  param([string]$OrderId)
+  # Ähnlicher Fix für Production
+  $signPath = '/api/production/time'
+  $fullPath = "/api/production/time?order_id=$OrderId"
+  $timestamp = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $nonce = [guid]::NewGuid().ToString().Replace('-', '')
+  $bodyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+  $baseString = "GET`n$signPath`n$bodyHash`n$timestamp`n$nonce"
+  $keyBytes = [System.Text.Encoding]::UTF8.GetBytes($script:BridgeSecret)
+  $hmac = New-Object System.Security.Cryptography.HMACSHA256
+  $hmac.Key = $keyBytes
+  $signatureBytes = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($baseString))
+  $signature = ($signatureBytes | ForEach-Object { '{0:x2}' -f $_ }) -join ''
+  $headers = @{
+    'Authorization' = "Bearer $script:BridgeToken"
+    'X-Timestamp' = $timestamp
+    'X-Nonce' = $nonce
+    'X-Signature' = $signature
+  }
+  $url = "$script:BridgeBase$fullPath"
+  Invoke-RestMethod -Uri $url -Method 'GET' -Headers $headers
+}
 function Set-BridgePayment { param([string]$OrderId) Invoke-Bridge -Method 'POST' -Path '/api/payment/charge' -Body @{order_id = $OrderId; status = 'paid'} }
 function Set-BridgeLockerLabel { param([string]$PickupCode, [string]$Label) Invoke-Bridge -Method 'POST' -Path '/api/locker/label' -Body @{pickup_code = $PickupCode; label_text = $Label} }
 function Open-BridgeLocker { param([string]$PickupCode) Invoke-Bridge -Method 'POST' -Path '/api/locker/open' -Body @{pickup_code = $PickupCode} }
